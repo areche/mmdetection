@@ -982,12 +982,19 @@ class PhotoMetricDistortion:
             assert results['img_fields'] == ['img'], \
                 'Only single img_fields is allowed'
         img = results['img']
-        img = img.astype(np.float32)
+
+        assert img.dtype == np.float32, \
+            'PhotoMetricDistortion needs the input image of dtype np.float32,'\
+            ' please set "to_float32=True" in "LoadImageFromFile" pipeline'
+
+        # img = img.astype(np.float32)
         # random brightness
         if random.randint(2):
             delta = random.uniform(-self.brightness_delta,
                                    self.brightness_delta)
             img += delta
+            img[img > 255] = 255
+            img[img < 0] = 0
 
         # mode == 0 --> do random contrast first
         # mode == 1 --> do random contrast last
@@ -997,14 +1004,17 @@ class PhotoMetricDistortion:
                 alpha = random.uniform(self.contrast_lower,
                                        self.contrast_upper)
                 img *= alpha
+                img[img > 255] = 255
 
         # convert color from BGR to HSV
+        img /= 255.
         img = mmcv.bgr2hsv(img)
 
         # random saturation
         if random.randint(2):
             img[..., 1] *= random.uniform(self.saturation_lower,
                                           self.saturation_upper)
+            img[..., 1][img[..., 1] > 1] = 1
 
         # random hue
         if random.randint(2):
@@ -1014,6 +1024,7 @@ class PhotoMetricDistortion:
 
         # convert color from HSV to BGR
         img = mmcv.hsv2bgr(img)
+        img *= 255.
 
         # random contrast
         if mode == 0:
@@ -1021,6 +1032,7 @@ class PhotoMetricDistortion:
                 alpha = random.uniform(self.contrast_lower,
                                        self.contrast_upper)
                 img *= alpha
+                img[img > 255] = 255
 
         # randomly swap channels
         if random.randint(2):
@@ -2551,7 +2563,7 @@ class RandomAffine:
         # Rotation
         rotation_degree = random.uniform(-self.max_rotate_degree,
                                          self.max_rotate_degree)
-        rotation_matrix = self._get_rotation_matrix(rotation_degree)
+        rotation_matrix = self._get_rotation_matrix(rotation_degree, height, width)
 
         # Scaling
         scaling_ratio = random.uniform(self.scaling_ratio_range[0],
@@ -2656,13 +2668,16 @@ class RandomAffine:
         return repr_str
 
     @staticmethod
-    def _get_rotation_matrix(rotate_degrees):
+    def _get_rotation_matrix(rotate_degrees, width, height):
+        trans = RandomAffine._get_translation_matrix(width/2, height/2)
         radian = math.radians(rotate_degrees)
         rotation_matrix = np.array(
             [[np.cos(radian), -np.sin(radian), 0.],
-             [np.sin(radian), np.cos(radian), 0.], [0., 0., 1.]],
+             [np.sin(radian), np.cos(radian), 0.],
+             [0., 0., 1.]],
             dtype=np.float32)
-        return rotation_matrix
+        trans_inv = RandomAffine._get_translation_matrix(-width/2, -height/2)
+        return trans @ rotation_matrix @ trans_inv
 
     @staticmethod
     def _get_scaling_matrix(scale_ratio):
@@ -2714,18 +2729,21 @@ class YOLOXHSVRandomAug:
     def __call__(self, results):
         img = results['img']
         hsv_gains = np.random.uniform(-1, 1, 3) * [
-            self.hue_delta, self.saturation_delta, self.value_delta
+            self.hue_delta, self.saturation_delta / 360, self.value_delta / 360
         ]
         # random selection of h, s, v
         hsv_gains *= np.random.randint(0, 2, 3)
         # prevent overflow
-        hsv_gains = hsv_gains.astype(np.int16)
-        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.int16)
+        #hsv_gains = hsv_gains.astype(np.int16)
+        img_hsv = cv2.cvtColor(img.astype(np.float32), cv2.COLOR_BGR2HSV)#.astype(np.int16)
 
-        img_hsv[..., 0] = (img_hsv[..., 0] + hsv_gains[0]) % 180
-        img_hsv[..., 1] = np.clip(img_hsv[..., 1] + hsv_gains[1], 0, 255)
-        img_hsv[..., 2] = np.clip(img_hsv[..., 2] + hsv_gains[2], 0, 255)
-        cv2.cvtColor(img_hsv.astype(img.dtype), cv2.COLOR_HSV2BGR, dst=img)
+        img_hsv[..., 0] = np.remainder(img_hsv[..., 0] + hsv_gains[0], 360)
+        img_hsv[..., 1] = np.clip(img_hsv[..., 1] + hsv_gains[1], 0, 1)
+        img_hsv[..., 2] = np.clip(img_hsv[..., 2] + hsv_gains[2], 0, 1)
+        # cv2.cvtColor(img_hsv.astype(img.dtype), cv2.COLOR_HSV2BGR, dst=img)
+        img_bgr = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR)
+
+        img = img_bgr.astype(img.dtype)
 
         results['img'] = img
         return results
@@ -2736,3 +2754,30 @@ class YOLOXHSVRandomAug:
         repr_str += f'saturation_delta={self.saturation_delta}, '
         repr_str += f'value_delta={self.value_delta})'
         return repr_str
+
+@PIPELINES.register_module()
+class RandomContrast:
+    def __init__(self, clip_limit=(1,7), tile_grid_size=(1, 14)):
+        self.clip_limit = clip_limit
+        self.tile_grid_size = tile_grid_size
+
+    def __call__(self, results):
+        img = results['img']
+
+        clip_limit = random.uniform(self.clip_limit[0], self.clip_limit[1])
+        tile_grid_size = random.randint(self.tile_grid_size[0], self.tile_grid_size[1])
+
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_grid_size, tile_grid_size))
+        for i in range(3):
+            img[:, :, i] = clahe.apply((img[:, :, i]))
+
+        results['img'] = img
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(clip_limit={self.clip_limit}, '
+        repr_str += f'tile_grid_size={self.tile_grid_size})'
+        return repr_str
+
+

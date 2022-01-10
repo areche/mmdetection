@@ -202,7 +202,7 @@ class CSPDarknet(BaseModule):
             i for i in range(len(arch_setting) + 1))
         if frozen_stages not in range(-1, len(arch_setting) + 1):
             raise ValueError('frozen_stages must be in range(-1, '
-                             'len(arch_setting) + 1). But received '
+                             f'{len(arch_setting) + 1}). But received '
                              f'{frozen_stages}')
 
         self.out_indices = out_indices
