@@ -982,12 +982,7 @@ class PhotoMetricDistortion:
             assert results['img_fields'] == ['img'], \
                 'Only single img_fields is allowed'
         img = results['img']
-
-        assert img.dtype == np.float32, \
-            'PhotoMetricDistortion needs the input image of dtype np.float32,'\
-            ' please set "to_float32=True" in "LoadImageFromFile" pipeline'
-
-        # img = img.astype(np.float32)
+        img = img.astype(np.float32)
         # random brightness
         if random.randint(2):
             delta = random.uniform(-self.brightness_delta,
@@ -2563,7 +2558,7 @@ class RandomAffine:
         # Rotation
         rotation_degree = random.uniform(-self.max_rotate_degree,
                                          self.max_rotate_degree)
-        rotation_matrix = self._get_rotation_matrix(rotation_degree, height, width)
+        rotation_matrix = self._get_rotation_matrix(rotation_degree, width, height)
 
         # Scaling
         scaling_ratio = random.uniform(self.scaling_ratio_range[0],
@@ -2721,7 +2716,7 @@ class YOLOXHSVRandomAug:
         value_delta (int): delat of value. Default: 30.
     """
 
-    def __init__(self, hue_delta=5, saturation_delta=30, value_delta=30):
+    def __init__(self, hue_delta=10, saturation_delta=30, value_delta=30):
         self.hue_delta = hue_delta
         self.saturation_delta = saturation_delta
         self.value_delta = value_delta
@@ -2735,13 +2730,13 @@ class YOLOXHSVRandomAug:
         hsv_gains *= np.random.randint(0, 2, 3)
         # prevent overflow
         #hsv_gains = hsv_gains.astype(np.int16)
-        img_hsv = cv2.cvtColor(img.astype(np.float32), cv2.COLOR_BGR2HSV)#.astype(np.int16)
+        img_hsv = cv2.cvtColor(img.astype(np.float32) / 255., cv2.COLOR_BGR2HSV)#.astype(np.int16)
 
         img_hsv[..., 0] = np.remainder(img_hsv[..., 0] + hsv_gains[0], 360)
         img_hsv[..., 1] = np.clip(img_hsv[..., 1] + hsv_gains[1], 0, 1)
         img_hsv[..., 2] = np.clip(img_hsv[..., 2] + hsv_gains[2], 0, 1)
         # cv2.cvtColor(img_hsv.astype(img.dtype), cv2.COLOR_HSV2BGR, dst=img)
-        img_bgr = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR)
+        img_bgr = cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR) * 255.
 
         img = img_bgr.astype(img.dtype)
 
@@ -2755,9 +2750,10 @@ class YOLOXHSVRandomAug:
         repr_str += f'value_delta={self.value_delta})'
         return repr_str
 
+
 @PIPELINES.register_module()
 class RandomContrast:
-    def __init__(self, clip_limit=(1,7), tile_grid_size=(1, 14)):
+    def __init__(self, clip_limit=(1, 7), tile_grid_size=(1, 14)):
         self.clip_limit = clip_limit
         self.tile_grid_size = tile_grid_size
 
