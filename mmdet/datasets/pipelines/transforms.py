@@ -2057,12 +2057,12 @@ class Mosaic:
         mosaic_bboxes = []
         if len(results['img'].shape) == 3:
             mosaic_img = np.full(
-                (int(self.img_scale[0] * 2), int(self.img_scale[1] * 2), 3),
+                (int(self.img_scale[0]), int(self.img_scale[1]), 3),
                 self.pad_val,
                 dtype=results['img'].dtype)
         else:
             mosaic_img = np.full(
-                (int(self.img_scale[0] * 2), int(self.img_scale[1] * 2)),
+                (int(self.img_scale[0]), int(self.img_scale[1])),
                 self.pad_val,
                 dtype=results['img'].dtype)
 
@@ -2118,17 +2118,17 @@ class Mosaic:
 
             if self.bbox_clip_border:
                 mosaic_bboxes[:, 0::2] = np.clip(mosaic_bboxes[:, 0::2], 0,
-                                                 2 * self.img_scale[1])
+                                                 self.img_scale[1])
                 mosaic_bboxes[:, 1::2] = np.clip(mosaic_bboxes[:, 1::2], 0,
-                                                 2 * self.img_scale[0])
+                                                 self.img_scale[0])
 
             if not self.skip_filter:
                 mosaic_bboxes, mosaic_labels = \
                     self._filter_box_candidates(mosaic_bboxes, mosaic_labels)
 
         # remove outside bboxes
-        inside_inds = find_inside_bboxes(mosaic_bboxes, 2 * self.img_scale[0],
-                                         2 * self.img_scale[1])
+        inside_inds = find_inside_bboxes(mosaic_bboxes, self.img_scale[0],
+                                         self.img_scale[1])
         mosaic_bboxes = mosaic_bboxes[inside_inds]
         mosaic_labels = mosaic_labels[inside_inds]
 
@@ -2171,7 +2171,7 @@ class Mosaic:
             x1, y1, x2, y2 = center_position_xy[0], \
                              max(center_position_xy[1] - img_shape_wh[1], 0), \
                              min(center_position_xy[0] + img_shape_wh[0],
-                                 self.img_scale[1] * 2), \
+                                 self.img_scale[1]), \
                              center_position_xy[1]
             crop_coord = 0, img_shape_wh[1] - (y2 - y1), min(
                 img_shape_wh[0], x2 - x1), img_shape_wh[1]
@@ -2181,7 +2181,7 @@ class Mosaic:
             x1, y1, x2, y2 = max(center_position_xy[0] - img_shape_wh[0], 0), \
                              center_position_xy[1], \
                              center_position_xy[0], \
-                             min(self.img_scale[0] * 2, center_position_xy[1] +
+                             min(self.img_scale[0], center_position_xy[1] +
                                  img_shape_wh[1])
             crop_coord = img_shape_wh[0] - (x2 - x1), 0, img_shape_wh[0], min(
                 y2 - y1, img_shape_wh[1])
@@ -2191,8 +2191,8 @@ class Mosaic:
             x1, y1, x2, y2 = center_position_xy[0], \
                              center_position_xy[1], \
                              min(center_position_xy[0] + img_shape_wh[0],
-                                 self.img_scale[1] * 2), \
-                             min(self.img_scale[0] * 2, center_position_xy[1] +
+                                 self.img_scale[1]), \
+                             min(self.img_scale[0], center_position_xy[1] +
                                  img_shape_wh[1])
             crop_coord = 0, 0, min(img_shape_wh[0],
                                    x2 - x1), min(y2 - y1, img_shape_wh[1])
@@ -2280,6 +2280,7 @@ class MixUp:
                  img_scale=(640, 640),
                  ratio_range=(0.5, 1.5),
                  flip_ratio=0.5,
+                 mix_ratio_range=(0.4,0.6),
                  pad_val=114,
                  max_iters=15,
                  min_bbox_size=5,
@@ -2291,6 +2292,7 @@ class MixUp:
         self.dynamic_scale = img_scale
         self.ratio_range = ratio_range
         self.flip_ratio = flip_ratio
+        self.mix_ratio_range = mix_ratio_range
         self.pad_val = pad_val
         self.max_iters = max_iters
         self.min_bbox_size = min_bbox_size
@@ -2426,7 +2428,8 @@ class MixUp:
 
         # 8. mix up
         ori_img = ori_img.astype(np.float32)
-        mixup_img = 0.5 * ori_img + 0.5 * padded_cropped_img.astype(np.float32)
+        mix_ratio = random.uniform(*self.mix_ratio_range)
+        mixup_img = mix_ratio * ori_img + (1-mix_ratio) * padded_cropped_img.astype(np.float32)
 
         retrieve_gt_labels = retrieve_results['gt_labels']
         if not self.skip_filter:
@@ -2558,19 +2561,19 @@ class RandomAffine:
         # Rotation
         rotation_degree = random.uniform(-self.max_rotate_degree,
                                          self.max_rotate_degree)
-        rotation_matrix = self._get_rotation_matrix(rotation_degree, width, height)
+        rotation_matrix = self._get_rotation_matrix(rotation_degree, img.shape[1]/2, img.shape[0]/2)
 
         # Scaling
         scaling_ratio = random.uniform(self.scaling_ratio_range[0],
                                        self.scaling_ratio_range[1])
-        scaling_matrix = self._get_scaling_matrix(scaling_ratio)
+        scaling_matrix = self._get_scaling_matrix(scaling_ratio, img.shape[1]/2, img.shape[0]/2)
 
         # Shear
         x_degree = random.uniform(-self.max_shear_degree,
                                   self.max_shear_degree)
         y_degree = random.uniform(-self.max_shear_degree,
                                   self.max_shear_degree)
-        shear_matrix = self._get_shear_matrix(x_degree, y_degree)
+        shear_matrix = self._get_shear_matrix(x_degree, y_degree, img.shape[1]/2, img.shape[0]/2)
 
         # Translation
         trans_x = random.uniform(-self.max_translate_ratio,
@@ -2663,39 +2666,36 @@ class RandomAffine:
         return repr_str
 
     @staticmethod
-    def _get_rotation_matrix(rotate_degrees, width, height):
-        trans = RandomAffine._get_translation_matrix(width/2, height/2)
+    def _get_rotation_matrix(rotate_degrees, x=0, y=0):
+        trans = RandomAffine._get_translation_matrix(x, y)
         radian = math.radians(rotate_degrees)
         rotation_matrix = np.array(
             [[np.cos(radian), -np.sin(radian), 0.],
              [np.sin(radian), np.cos(radian), 0.],
              [0., 0., 1.]],
             dtype=np.float32)
-        trans_inv = RandomAffine._get_translation_matrix(-width/2, -height/2)
+        trans_inv = RandomAffine._get_translation_matrix(-x, -y)
         return trans @ rotation_matrix @ trans_inv
 
     @staticmethod
-    def _get_scaling_matrix(scale_ratio):
+    def _get_scaling_matrix(scale_ratio, x=0, y=0):
+        trans = RandomAffine._get_translation_matrix(x, y)
         scaling_matrix = np.array(
             [[scale_ratio, 0., 0.], [0., scale_ratio, 0.], [0., 0., 1.]],
             dtype=np.float32)
-        return scaling_matrix
+        trans_inv = RandomAffine._get_translation_matrix(-x, -y)
+        return trans @ scaling_matrix @ trans_inv
 
     @staticmethod
-    def _get_share_matrix(scale_ratio):
-        scaling_matrix = np.array(
-            [[scale_ratio, 0., 0.], [0., scale_ratio, 0.], [0., 0., 1.]],
-            dtype=np.float32)
-        return scaling_matrix
-
-    @staticmethod
-    def _get_shear_matrix(x_shear_degrees, y_shear_degrees):
+    def _get_shear_matrix(x_shear_degrees, y_shear_degrees, x=0, y=0):
+        trans = RandomAffine._get_translation_matrix(x, y)
         x_radian = math.radians(x_shear_degrees)
         y_radian = math.radians(y_shear_degrees)
         shear_matrix = np.array([[1, np.tan(x_radian), 0.],
                                  [np.tan(y_radian), 1, 0.], [0., 0., 1.]],
                                 dtype=np.float32)
-        return shear_matrix
+        trans_inv = RandomAffine._get_translation_matrix(-x, -y)
+        return trans @ shear_matrix @ trans_inv
 
     @staticmethod
     def _get_translation_matrix(x, y):
